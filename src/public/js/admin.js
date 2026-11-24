@@ -70,8 +70,35 @@
     }));
   }
 
+  /* ------------------------------------------------------------ anti-CSRF */
+  // El token se pide una vez a GET /api/csrf-token y se manda en la cabecera
+  // X-CSRF-Token en cada POST/PUT/PATCH/DELETE (#8).
+  var tokenCsrf = null;
+
+  function obtenerTokenCsrf() {
+    if (!tokenCsrf) {
+      tokenCsrf = fetch(API + '/csrf-token', { credentials: 'same-origin' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) { return data.token || ''; })
+        .catch(function () { tokenCsrf = null; return ''; });
+    }
+    return tokenCsrf;
+  }
+
   function api(url, opciones) {
-    return fetch(API + url, opciones).then(function (res) {
+    opciones = opciones || {};
+    var metodo = (opciones.method || 'GET').toUpperCase();
+    var cambiaEstado = metodo !== 'GET' && metodo !== 'HEAD';
+
+    return (cambiaEstado ? obtenerTokenCsrf() : Promise.resolve(null)).then(function (token) {
+      if (token) {
+        opciones.headers = Object.assign({}, opciones.headers, { 'X-CSRF-Token': token });
+      }
+      return fetch(API + url, opciones);
+    }).then(function (res) {
+      // Si el token venció (por ejemplo, se borraron las cookies), se pide otro
+      // para la próxima vez.
+      if (res.status === 403 && cambiaEstado) tokenCsrf = null;
       return res.json().catch(function () { return {}; }).then(function (data) {
         return { ok: res.ok, status: res.status, data: data };
       });

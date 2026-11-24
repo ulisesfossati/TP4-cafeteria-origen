@@ -3,6 +3,7 @@ import express from 'express';
 
 import config from './config';
 import { rutaNoEncontrada, manejadorErrores } from './middleware/errores';
+import { entregarTokenCsrf, verificarCsrf } from './middleware/csrf';
 import authRoutes from './routes/auth.routes';
 import productosRoutes from './routes/productos.routes';
 import pedidosRoutes from './routes/pedidos.routes';
@@ -36,6 +37,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/salud', (req, res) => {
   res.json({ ok: true, servicio: 'cafeteria-origen', hora: new Date().toISOString() });
 });
+
+// Anti-CSRF (#8): token aleatorio por sesión del navegador. Todo POST, PUT,
+// PATCH y DELETE de la API tiene que traerlo en X-CSRF-Token (o _csrf);
+// si falta o no coincide, 403. Ver middleware/csrf.ts.
+app.get('/api/csrf-token', entregarTokenCsrf);
+app.use('/api', verificarCsrf);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/productos', productosRoutes);
