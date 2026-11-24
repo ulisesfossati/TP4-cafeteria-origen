@@ -1,18 +1,24 @@
+import crypto from 'crypto';
 import path from 'path';
 
 /**
  * Configuración de la aplicación.
  *
- * -----------------------------------------------------------------------------
- * FALLA 1 — Cifrado de datos y gestión de secretos (Ajustes de configuración)
- * -----------------------------------------------------------------------------
- * Las credenciales de la base de datos y el secreto de sesión están escritos
- * a mano en el código fuente. Cualquiera que clone el repositorio las conoce.
- *
- * Corrección: leer todo desde variables de entorno (ver .env.example) o desde
- * un gestor de secretos, y no versionar ningún secreto.
- * -----------------------------------------------------------------------------
+ * Los secretos (credenciales de la base y secreto de sesión) salen de
+ * variables de entorno y nunca se escriben en el código: el repositorio no
+ * conoce ninguno. En Docker los pone docker-compose.yml a partir del .env
+ * (ver .env.example).
  */
+
+/** Lee una variable de entorno obligatoria; sin ella la app no arranca. */
+function requerida(nombre: string): string {
+  const valor = process.env[nombre];
+  if (!valor) {
+    throw new Error(`Falta la variable de entorno ${nombre} (ver .env.example).`);
+  }
+  return valor;
+}
+
 export default {
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -21,16 +27,14 @@ export default {
     host: process.env.DB_HOST || 'db',
     port: Number(process.env.DB_PORT || 5432),
     database: process.env.DB_NAME || 'origen',
-    // FALLA: la aplicación se conecta con el superusuario de la base de datos
-    // (mínimos privilegios). Existe un usuario `origen_app` con permisos
-    // reducidos para usar como corrección.
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
+    // Usuario de aplicación con permisos reducidos (origen_app), nunca el superusuario.
+    user: requerida('DB_USER'),
+    password: requerida('DB_PASSWORD'),
   },
 
-  // FALLA: secreto fijo y predecible, escrito en el código.
-  // Se necesita para firmar el token anti-CSRF (corrección del CSRF).
-  sessionSecret: 'origen-cafe-2024',
+  // Firma el token anti-CSRF. Si no se define, se genera uno al azar en cada
+  // arranque (los tokens emitidos antes de reiniciar dejan de valer).
+  sessionSecret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
 
   uploadsDir: process.env.UPLOADS_DIR || path.join(__dirname, '..', 'uploads'),
 };

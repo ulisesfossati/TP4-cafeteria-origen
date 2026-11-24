@@ -18,8 +18,13 @@ Requisitos: **Docker Desktop** (o Docker Engine + Compose v2).
 
 ```bash
 cd cafeteria-origen
+cp .env.example .env      # y completar POSTGRES_PASSWORD y DB_PASSWORD
 docker compose up -d --build
 ```
+
+> Si ya tenías la base creada de antes (con `trust` y la app como
+> superusuario), recreala una vez para que tome las contraseñas nuevas:
+> `docker compose down -v && docker compose up -d --build`.
 
 | Qué | Dónde |
 |---|---|
