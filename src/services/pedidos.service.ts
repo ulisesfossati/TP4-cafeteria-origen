@@ -1,6 +1,13 @@
 import * as db from '../db';
 import { calcularPrecio } from '../catalogo';
 import type { Pedido, PedidoConItems, PedidoItem, Producto } from '../tipos';
+import { entero, errorDeValidacion, texto } from '../validacion';
+
+/** Topes de un pedido: lo que una mesa puede pedir de verdad. */
+const MAX_ITEMS = 30;
+const MAX_CANTIDAD = 50;
+/** Mayor id que entra en una columna INTEGER de PostgreSQL. */
+const MAX_ID = 2147483647;
 
 /** Un renglón del pedido, tal como llega en el cuerpo de la petición. */
 export interface ItemPedido {
@@ -40,21 +47,27 @@ type Id = number | string;
  * Crea un pedido a partir de una lista de items { productoId, cantidad }.
  * Total = suma de calcularPrecio(producto) x cantidad
  */
-export async function crear({ mesa, cliente, items }: NuevoPedido): Promise<PedidoConItems | null> {
-  // FALLA: no se valida que items exista, sea un array, ni que cada cantidad
-  // sea un entero positivo. Los tipos de `NuevoPedido` NO alcanzan: el cuerpo
-  // de la petición llega como `any` y en ejecución puede traer cualquier cosa.
+export async function crear(datos: NuevoPedido): Promise<PedidoConItems | null> {
+  // Los tipos de `NuevoPedido` no alcanzan: el cuerpo llega como `any` y en
+  // ejecución puede traer cualquier cosa, así que cada campo se valida acá.
+  const mesa = texto(datos.mesa, 'La mesa', 1, 10);
+  const cliente = texto(datos.cliente, 'El nombre', 2, 40);
+  const items: unknown = datos.items;
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_ITEMS) {
+    throw errorDeValidacion(`El pedido tiene que tener entre 1 y ${MAX_ITEMS} productos.`);
+  }
+
   const filas: { productoId: number; cantidad: number; precioUnitario: number }[] = [];
 
   for (const item of items) {
-    // Si el producto no existe, buscarProducto devuelve null y `precio`
-    // revienta con un TypeError cuyo stack se filtra al cliente.
-    const producto = await buscarProducto(item.productoId);
-    const precioUnitario = calcularPrecio(producto);
+    const productoId = entero(item?.productoId, 'El producto', 1, MAX_ID);
+    const cantidad = entero(item?.cantidad, 'La cantidad', 1, MAX_CANTIDAD);
+    const producto = await buscarProducto(productoId);
+    if (!producto) throw errorDeValidacion('Uno de los productos del pedido no existe.');
     filas.push({
       productoId: producto.id,
-      cantidad: item.cantidad,
-      precioUnitario,
+      cantidad,
+      precioUnitario: calcularPrecio(producto),
     });
   }
 
