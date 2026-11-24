@@ -22,11 +22,12 @@ services:
     environment:
       POSTGRES_DB: origen
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      # VULNERABILIDAD (configuración): se usa una contraseña trivial y la base
-      # de datos acepta conexiones desde cualquier origen ("trust"), sin
-      # contraseña ni cifrado. Corregir → md5/scram-sha-256 + contraseña robusta.
-      POSTGRES_HOST_AUTH_METHOD: trust
+      # Las contraseñas salen del .env (ver .env.example), nunca del repo. Sin
+      # POSTGRES_HOST_AUTH_METHOD la imagen exige contraseña (scram-sha-256)
+      # a toda conexión por red.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en el .env (copiá .env.example a .env)}
+      # Contraseña del usuario de la app, que crea docker/initdb/02-usuario-aplicacion.sh.
+      APP_DB_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en el .env (copiá .env.example a .env)}
     volumes:
       - datos_origen:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
@@ -53,12 +54,11 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: origen
-      # VULNERABILIDAD (mínimos privilegios): la aplicación se conecta con el
-      # superusuario `postgres`. Corregir → usar el usuario `origen_app` que
-      # sólo tiene permisos sobre las tablas del catálogo (ver
-      # docker/initdb/02-usuario-aplicacion.sql).
-      DB_USER: postgres
-      DB_PASSWORD: postgres
+      # Mínimos privilegios: la app usa `origen_app`, que sólo lee y escribe
+      # datos (ver docker/initdb/02-usuario-aplicacion.sh), nunca el superusuario.
+      DB_USER: origen_app
+      DB_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD en el .env (copiá .env.example a .env)}
+      SESSION_SECRET: ${SESSION_SECRET:-}
       UPLOADS_DIR: /app/uploads
       # Claves de las cuentas de ejemplo (se toman del .env). Si falta una, la
       # app genera una al azar y la muestra una vez en `docker compose logs app`.
