@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import * as db from './db';
 import { CATALOGO } from './catalogo';
@@ -6,7 +7,6 @@ import type { Rol } from './tipos';
 
 interface UsuarioInicial {
   username: string;
-  password: string;
   rol: Rol;
   nombre: string;
 }
@@ -21,31 +21,26 @@ interface UsuarioInicial {
 export const USUARIOS_INICIALES: UsuarioInicial[] = [
   {
     username: 'admin',
-    password: 'admin',
     rol: 'admin',
     nombre: 'Administración',
   },
   {
     username: 'valentina',
-    password: 'origen2024',
     rol: 'admin',
     nombre: 'Valentina',
   },
   {
     username: 'barista',
-    password: 'cafe123',
     rol: 'barista',
     nombre: 'Barista',
   },
   {
     username: 'mozo',
-    password: 'mozo123',
     rol: 'mozo',
     nombre: 'Mozo de sala',
   },
   {
     username: 'cliente',
-    password: 'cliente',
     rol: 'cliente',
     nombre: 'Cliente',
   },
@@ -71,12 +66,23 @@ export async function inicializarBase(): Promise<void> {
 
   for (const usuario of USUARIOS_INICIALES) {
     if (yaCargados.has(usuario.username)) continue;
-    await db.query(
+
+    // No hay claves de fábrica: cada una sale del entorno (CLAVE_ADMIN,
+    // CLAVE_BARISTA, ...) y, si falta, se genera una al azar que se muestra
+    // una sola vez en el log del servidor.
+    const variable = `CLAVE_${usuario.username.toUpperCase()}`;
+    const configurada = process.env[variable];
+    const clave = configurada || crypto.randomBytes(12).toString('base64url');
+
+    const { rowCount } = await db.query(
       `INSERT INTO usuarios (username, password, rol, nombre)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (username) DO NOTHING`,
-      [usuario.username, await bcrypt.hash(usuario.password, RONDAS_BCRYPT), usuario.rol, usuario.nombre]
+      [usuario.username, await bcrypt.hash(clave, RONDAS_BCRYPT), usuario.rol, usuario.nombre]
     );
+    if (rowCount && !configurada) {
+      console.log(`[inicializar] Usuario "${usuario.username}" creado con la clave ${clave} (para elegirla, definí ${variable} en .env).`);
+    }
   }
 
   // --- Catálogo -------------------------------------------------------------
