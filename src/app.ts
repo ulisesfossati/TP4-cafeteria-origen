@@ -1,5 +1,6 @@
 import path from 'path';
 import express from 'express';
+import helmet from 'helmet';
 
 import config from './config';
 import { rutaNoEncontrada, manejadorErrores } from './middleware/errores';
@@ -14,15 +15,44 @@ import debugRoutes from './routes/debug.routes';
 const app = express();
 
 /**
- * FALLA — Ajustes de configuración (OWASP A05:2021)
+ * Cabeceras de seguridad (#23) con helmet.
  *
- * Faltan:
- *  - helmet (cabeceras de seguridad: CSP, X-Content-Type-Options, HSTS...)
- *  - límite de tamaño del cuerpo más estricto por ruta
- *  - rate limiting global
- *  - política de CORS restringida al propio origen
- *  - helmet CSP además sirve como capa extra frente al XSS
+ * Content-Security-Policy: el navegador sólo ejecuta scripts y carga estilos
+ * que vengan del propio sitio ('self'). Un <script> inline, un onclick="" o
+ * un script de otro dominio inyectado por XSS queda bloqueado aunque llegue
+ * al DOM: es la segunda capa detrás del textContent (#5, #6, #7).
+ *
+ * helmet además agrega X-Content-Type-Options: nosniff, Referrer-Policy,
+ * X-Frame-Options / frame-ancestors (anti-clickjacking), HSTS, etc.
  */
+const enProduccion = config.nodeEnv === 'production';
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        'default-src': ["'self'"],
+        'script-src': ["'self'"],
+        'script-src-attr': ["'none'"], // sin onclick="..." ni similares
+        'style-src': ["'self'"],
+        'img-src': ["'self'", 'data:'], // data: para el favicon SVG
+        'font-src': ["'self'"],
+        'connect-src': ["'self'"], // fetch sólo a la propia API
+        'object-src': ["'none'"],
+        'base-uri': ["'self'"],
+        'form-action': ["'self'"],
+        'frame-ancestors': ["'none'"],
+        // Sólo en producción (con HTTPS): en localhost por HTTP rompería todo.
+        ...(enProduccion ? { 'upgrade-insecure-requests': [] } : {}),
+      },
+    },
+    // HSTS sólo tiene sentido servido por HTTPS.
+    strictTransportSecurity: enProduccion,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  })
+);
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
