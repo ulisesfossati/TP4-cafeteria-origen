@@ -73,21 +73,24 @@ export async function masVendido(): Promise<ProductoMasVendido | null> {
   return rows[0] || null;
 }
 
+/** Orígenes que existen en el catálogo: cualquier otro valor se rechaza. */
+export const ORIGENES_PERMITIDOS = ['Brasil', 'Colombia', 'Etiopía'];
+
 /** Ventas por origen (variedad). */
 export async function ventasPorVariedad(variedad: string): Promise<VentaPorVariedad[]> {
-  // FALLA: inyección SQL — el origen se concatena en el texto de la consulta.
-  // El HAVING está al final a propósito: es donde un payload UNION clásico
-  // ("Brasil' UNION SELECT username, password, 1, 1 FROM usuarios--") cierra la
-  // consulta original y agrega la segunda, que lee otra tabla.
-  const sql = `
-    SELECT pr.variedad, pr.nombre, SUM(pi.cantidad) AS unidades,
-           SUM(pi.cantidad * pi.precio_unitario) AS total
-      FROM pedido_items pi
-      JOIN productos pr ON pr.id = pi.producto_id
-     GROUP BY pr.variedad, pr.nombre
-    HAVING pr.variedad = '${variedad}'`;
+  if (!ORIGENES_PERMITIDOS.includes(variedad)) {
+    throw Object.assign(new Error('El origen tiene que ser Brasil, Colombia o Etiopía.'), { status: 400 });
+  }
 
-  const { rows } = await db.query<VentaPorVariedad>(sql);
+  const { rows } = await db.query<VentaPorVariedad>(
+    `SELECT pr.variedad, pr.nombre, SUM(pi.cantidad) AS unidades,
+            SUM(pi.cantidad * pi.precio_unitario) AS total
+       FROM pedido_items pi
+       JOIN productos pr ON pr.id = pi.producto_id
+      WHERE pr.variedad = $1
+      GROUP BY pr.variedad, pr.nombre`,
+    [variedad]
+  );
   return rows;
 }
 
