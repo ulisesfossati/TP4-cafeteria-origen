@@ -15,15 +15,59 @@
     return Number(valor || 0).toLocaleString('es-AR', { style: 'currency', currency: 'ARS' });
   }
 
-  function raw(valor) {
-    // FALLA: no escapa nada. Usar escaparHtml() / textContent.
-    return String(valor == null ? '' : valor);
+  /* --------------------------------------------------------- DOM seguro */
+  // Todo lo que viene del servidor o de la URL entra al DOM con textContent
+  // (a través de estos helpers). Nunca se arma HTML concatenando strings.
+
+  function crear(tag, clase, contenido) {
+    var el = document.createElement(tag);
+    if (clase) el.className = clase;
+    if (Array.isArray(contenido)) {
+      contenido.forEach(function (hijo) { if (hijo) el.appendChild(hijo); });
+    } else if (contenido != null) {
+      el.textContent = String(contenido);
+    }
+    return el;
   }
 
-  function escaparHtml(texto) {
-    var div = document.createElement('div');
-    div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+  function reemplazar(nodo, hijos) {
+    nodo.replaceChildren.apply(nodo, hijos || []);
+  }
+
+  /** Celda de tabla: acepta texto o un nodo ya armado. */
+  function celda(contenido, clase, tag) {
+    if (contenido instanceof Node) return crear(tag || 'td', clase, [contenido]);
+    return crear(tag || 'td', clase, contenido == null ? '' : contenido);
+  }
+
+  /** Arma <thead> a partir de una lista de títulos ('Total|num' → clase num). */
+  function encabezado(titulos) {
+    return crear('thead', null, [crear('tr', null, titulos.map(function (t) {
+      var partes = t.split('|');
+      return celda(partes[0], partes[1] || null, 'th');
+    }))]);
+  }
+
+  /** <select> con opciones fijas (lista blanca) y la actual seleccionada. */
+  function selector(clase, atributo, id, opciones, actual) {
+    var sel = crear('select', clase);
+    sel.setAttribute(atributo, String(id));
+    opciones.forEach(function (valor) {
+      var op = crear('option', null, valor);
+      op.value = valor;
+      if (valor === actual) op.selected = true;
+      sel.appendChild(op);
+    });
+    return sel;
+  }
+
+  function renderKpis(contenedor, kpis) {
+    reemplazar(contenedor, kpis.map(function (k) {
+      return crear('div', 'kpi', [
+        crear('div', 'kpi-label', k.label),
+        crear('div', 'kpi-value', k.value),
+      ]);
+    }));
   }
 
   function api(url, opciones) {
@@ -60,7 +104,9 @@
 
   function feedback(el, mensaje, ok) {
     el.className = 'form-feedback ' + (ok ? 'is-ok' : 'is-error');
-    el.innerHTML = mensaje;
+    // Corrección XSS reflejado (#5): los mensajes (que pueden traer texto del
+    // servidor o del usuario) se muestran como texto plano.
+    el.textContent = mensaje;
   }
 
   /* ------------------------------------------------------------------ login */
@@ -74,8 +120,8 @@
       password: $('#login-password').value,
     }).then(function (resp) {
       if (!resp.ok) {
-        // FALLA (XSS reflejado): el mensaje del servidor (que incluye el
-        // usuario enviado) se pinta con innerHTML.
+        // feedback() usa textContent: aunque el servidor repitiera el usuario
+        // enviado, no se interpreta como HTML.
         feedback(caja, 'No pudimos iniciar sesión: ' + (resp.data.error || 'error desconocido'), false);
         return;
       }
@@ -89,15 +135,19 @@
       usuario = null;
       $('#vista-login').hidden = false;
       $('#vista-panel').hidden = true;
-      $('#admin-user').innerHTML = '';
+      reemplazar($('#admin-user'), []);
     });
   }
 
   function mostrarPanel() {
     $('#vista-login').hidden = true;
     $('#vista-panel').hidden = false;
-    $('#admin-user').innerHTML =
-      'Sesión de <strong>' + raw(usuario.nombre) + '</strong> · rol: <strong>' + raw(usuario.rol) + '</strong>';
+    reemplazar($('#admin-user'), [
+      document.createTextNode('Sesión de '),
+      crear('strong', null, usuario.nombre),
+      document.createTextNode(' · rol: '),
+      crear('strong', null, usuario.rol),
+    ]);
     $('#panel-bienvenida').textContent = 'Hola, ' + usuario.nombre;
     cargarTodo();
   }
@@ -121,7 +171,7 @@
             { label: 'Pedidos registrados', value: f.data.pedidos },
             {
               label: 'Producto más vendido',
-              value: mas ? raw(mas.nombre) : '—',
+              value: mas ? mas.nombre : '—',
             },
             {
               label: 'Unidades por tipo',
@@ -131,48 +181,46 @@
             },
           ];
 
-          $('#kpis').innerHTML = kpis.map(function (k) {
-            return '<div class="kpi"><div class="kpi-label">' + raw(k.label) + '</div>' +
-              '<div class="kpi-value">' + raw(k.value) + '</div></div>';
-          }).join('');
+          renderKpis($('#kpis'), kpis);
         });
       });
     });
   }
 
   /* --------------------------------------------------------------- pedidos */
+  var ESTADOS_PEDIDO = ['abierto', 'preparando', 'listo', 'entregado'];
+
   function tablaPedidos(filas, conAcciones) {
-    if (!filas || filas.length === 0) return '<p class="empty">No hay pedidos.</p>';
+    if (!filas || filas.length === 0) return [crear('p', 'empty', 'No hay pedidos.')];
 
-    var html = '<thead><tr><th>#</th><th>Mesa</th><th>Cliente</th><th>Estado</th>' +
-      '<th class="num">Total</th><th>Fecha</th>' + (conAcciones ? '<th>Acciones</th>' : '') + '</tr></thead><tbody>';
+    var titulos = ['#', 'Mesa', 'Cliente', 'Estado', 'Total|num', 'Fecha'];
+    if (conAcciones) titulos.push('Acciones');
 
-    filas.forEach(function (p) {
-      html += '<tr>' +
-        '<td>' + raw(p.id) + '</td>' +
-        '<td>' + raw(p.mesa) + '</td>' +
-        '<td>' + raw(p.cliente) + '</td>' +
-        '<td><span class="badge badge-' + raw(p.estado) + '">' + raw(p.estado) + '</span></td>' +
-        '<td class="num">' + money(p.total) + '</td>' +
-        '<td>' + new Date(p.creado_en).toLocaleString('es-AR') + '</td>' +
-        (conAcciones
-          ? '<td><select data-pedido="' + raw(p.id) + '" class="sel-estado">' +
-            ['abierto', 'preparando', 'listo', 'entregado'].map(function (e) {
-              return '<option value="' + e + '"' + (e === p.estado ? ' selected' : '') + '>' + e + '</option>';
-            }).join('') +
-            '</select></td>'
-          : '') +
-        '</tr>';
-    });
+    var cuerpo = crear('tbody', null, filas.map(function (p) {
+      // La clase del badge sólo se arma con un estado de la lista blanca.
+      var claseEstado = ESTADOS_PEDIDO.indexOf(p.estado) >= 0 ? ' badge-' + p.estado : '';
+      var celdas = [
+        celda(p.id),
+        celda(p.mesa),
+        celda(p.cliente),
+        celda(crear('span', 'badge' + claseEstado, p.estado)),
+        celda(money(p.total), 'num'),
+        celda(new Date(p.creado_en).toLocaleString('es-AR')),
+      ];
+      if (conAcciones) {
+        celdas.push(celda(selector('sel-estado', 'data-pedido', p.id, ESTADOS_PEDIDO, p.estado)));
+      }
+      return crear('tr', null, celdas);
+    }));
 
-    return html + '</tbody>';
+    return [encabezado(titulos), cuerpo];
   }
 
   function cargarPedidos() {
     api('/pedidos').then(function (resp) {
       var pedidos = resp.data.pedidos || [];
-      $('#tabla-pedidos').innerHTML = tablaPedidos(pedidos, true);
-      $('#tabla-ultimos').innerHTML = tablaPedidos(pedidos.slice(0, 5), false);
+      reemplazar($('#tabla-pedidos'), tablaPedidos(pedidos, true));
+      reemplazar($('#tabla-ultimos'), tablaPedidos(pedidos.slice(0, 5), false));
     });
   }
 
@@ -193,22 +241,25 @@
     api('/productos').then(function (resp) {
       var productos = resp.data.productos || [];
       productosCache = {};
-      var html = '<thead><tr><th>#</th><th>Nombre</th><th>Tipo</th><th>Origen</th>' +
-        '<th class="num">Precio</th><th>Acciones</th></tr></thead><tbody>';
 
-      productos.forEach(function (p) {
+      var cuerpo = crear('tbody', null, productos.map(function (p) {
         productosCache[p.id] = p;
-        html += '<tr>' +
-          '<td>' + raw(p.id) + '</td>' +
-          '<td>' + raw(p.nombre) + '</td>' +
-          '<td>' + raw(p.tipo) + '</td>' +
-          '<td>' + raw(p.variedad || '—') + '</td>' +
-          '<td class="num">' + money(p.precio) + '</td>' +
-          '<td><button class="link-danger" data-borrar="' + raw(p.id) + '">Borrar</button></td>' +
-          '</tr>';
-      });
+        var borrar = crear('button', 'link-danger', 'Borrar');
+        borrar.setAttribute('data-borrar', String(p.id));
+        return crear('tr', null, [
+          celda(p.id),
+          celda(p.nombre),
+          celda(p.tipo),
+          celda(p.variedad || '—'),
+          celda(money(p.precio), 'num'),
+          celda(borrar),
+        ]);
+      }));
 
-      $('#tabla-productos').innerHTML = html + '</tbody>';
+      reemplazar($('#tabla-productos'), [
+        encabezado(['#', 'Nombre', 'Tipo', 'Origen', 'Precio|num', 'Acciones']),
+        cuerpo,
+      ]);
     });
   }
 
@@ -299,12 +350,9 @@
             { label: 'Facturación', value: money(f.data.facturado) },
             { label: 'Pedidos', value: f.data.pedidos },
             { label: 'Ticket promedio', value: money(t.data.promedio) },
-            { label: 'Más vendido', value: mas ? raw(mas.nombre) + ' (' + raw(mas.unidades) + ')' : '—' },
+            { label: 'Más vendido', value: mas ? mas.nombre + ' (' + mas.unidades + ')' : '—' },
           ];
-          $('#kpis-reportes').innerHTML = kpis.map(function (k) {
-            return '<div class="kpi"><div class="kpi-label">' + raw(k.label) + '</div>' +
-              '<div class="kpi-value">' + raw(k.value) + '</div></div>';
-          }).join('');
+          renderKpis($('#kpis-reportes'), kpis);
         });
       });
     });
@@ -317,17 +365,21 @@
     api('/reportes/ventas-por-variedad?variedad=' + encodeURIComponent(variedad)).then(function (resp) {
       if (!resp.ok) {
         feedback(caja, 'Error: ' + (resp.data.error || 'desconocido'), false);
-        $('#tabla-ventas').innerHTML = '';
+        reemplazar($('#tabla-ventas'), []);
         return;
       }
       var ventas = resp.data.ventas || [];
-      var html = '<thead><tr><th>Origen</th><th>Producto</th><th class="num">Unidades</th>' +
-        '<th class="num">Total</th></tr></thead><tbody>';
-      ventas.forEach(function (v) {
-        html += '<tr><td>' + raw(v.variedad) + '</td><td>' + raw(v.nombre) + '</td>' +
-          '<td class="num">' + raw(v.unidades) + '</td><td class="num">' + money(v.total) + '</td></tr>';
-      });
-      $('#tabla-ventas').innerHTML = html + '</tbody>';
+      reemplazar($('#tabla-ventas'), [
+        encabezado(['Origen', 'Producto', 'Unidades|num', 'Total|num']),
+        crear('tbody', null, ventas.map(function (v) {
+          return crear('tr', null, [
+            celda(v.variedad),
+            celda(v.nombre),
+            celda(v.unidades, 'num'),
+            celda(money(v.total), 'num'),
+          ]);
+        })),
+      ]);
       feedback(caja, 'Consulta realizada.', true);
     });
   }
@@ -336,21 +388,18 @@
   function cargarUsuarios() {
     api('/admin/usuarios').then(function (resp) {
       var usuarios = resp.data.usuarios || [];
-      var html = '<thead><tr><th>#</th><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr></thead><tbody>';
-      usuarios.forEach(function (u) {
-        html += '<tr>' +
-          '<td>' + raw(u.id) + '</td>' +
-          '<td>' + raw(u.username) + '</td>' +
-          '<td>' + raw(u.nombre) + '</td>' +
-          '<td><span class="badge' + (u.rol === 'admin' ? ' badge-admin' : '') + '">' + raw(u.rol) + '</span></td>' +
-          '<td><select data-usuario="' + raw(u.id) + '" class="sel-rol">' +
-            ['cliente', 'mozo', 'barista', 'admin'].map(function (r) {
-              return '<option value="' + r + '"' + (r === u.rol ? ' selected' : '') + '>' + r + '</option>';
-            }).join('') +
-            '</select></td>' +
-          '</tr>';
-      });
-      $('#tabla-usuarios').innerHTML = html + '</tbody>';
+      reemplazar($('#tabla-usuarios'), [
+        encabezado(['#', 'Usuario', 'Nombre', 'Rol', 'Acciones']),
+        crear('tbody', null, usuarios.map(function (u) {
+          return crear('tr', null, [
+            celda(u.id),
+            celda(u.username),
+            celda(u.nombre),
+            celda(crear('span', 'badge' + (u.rol === 'admin' ? ' badge-admin' : ''), u.rol)),
+            celda(selector('sel-rol', 'data-usuario', u.id, ['cliente', 'mozo', 'barista', 'admin'], u.rol)),
+          ]);
+        })),
+      ]);
     });
   }
 
@@ -408,7 +457,22 @@
   function activarTab(evento) {
     var tab = evento.target.closest('.tab');
     if (!tab) return;
-    var vista = tab.getAttribute('data-vista');
+    mostrarVista(tab.getAttribute('data-vista'));
+  }
+
+  // Lista blanca de vistas del panel: lo único que se acepta desde la URL.
+  var VISTAS = {
+    resumen: 'Resumen',
+    pedidos: 'Pedidos',
+    productos: 'Productos',
+    reportes: 'Reportes',
+    usuarios: 'Usuarios',
+    herramientas: 'Herramientas',
+  };
+
+  function mostrarVista(vista) {
+    if (!Object.prototype.hasOwnProperty.call(VISTAS, vista)) return;
+    var tab = $('.tab[data-vista="' + vista + '"]');
     $$('.tab').forEach(function (t) { t.classList.remove('is-active'); });
     tab.classList.add('is-active');
     $$('.tab-panel').forEach(function (p) {
@@ -418,13 +482,14 @@
 
   /* ------------------------------------------------------------------ init */
   function init() {
-    // FALLA (XSS de DOM): se lee un parámetro de la URL y se inyecta con
-    // innerHTML. Al abrir admin.html?vista=<script>...</script> se ejecuta
-    // código en el navegador del admin.
+    // Corrección XSS de DOM (#7): el parámetro ?vista= de la URL sólo se usa
+    // si está en la lista blanca VISTAS, y el título se arma con el nombre
+    // de la lista (no con lo que vino en la URL), asignado con textContent.
     var params = new URLSearchParams(window.location.search);
     var objetivo = params.get('vista');
-    if (objetivo) {
-      $('#panel-bienvenida').innerHTML = 'Panel ' + objetivo;
+    if (objetivo && Object.prototype.hasOwnProperty.call(VISTAS, objetivo)) {
+      $('#panel-bienvenida').textContent = 'Panel ' + VISTAS[objetivo];
+      mostrarVista(objetivo);
     }
 
     $('#form-login').addEventListener('submit', iniciarSesion);
