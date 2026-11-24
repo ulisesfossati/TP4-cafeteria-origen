@@ -1,5 +1,9 @@
+import bcrypt from 'bcryptjs';
 import * as db from '../db';
 import type { Usuario } from '../tipos';
+
+/** Costo de bcrypt: 2^12 vueltas, lento a propósito para frenar a quien pruebe claves. */
+export const RONDAS_BCRYPT = 12;
 
 /**
  * Servicio de usuarios.
@@ -41,11 +45,9 @@ export async function autenticar(username: string, password: string): Promise<Us
   // El cuerpo de la petición puede traer cualquier cosa (un array, un objeto).
   if (typeof username !== 'string' || typeof password !== 'string') return null;
 
-  const { rows } = await db.query<Usuario>(
-    'SELECT * FROM usuarios WHERE username = $1 AND password = $2',
-    [username, password]
-  );
-  return rows[0] || null;
+  const usuario = await buscarPorUsername(username);
+  if (!usuario) return null;
+  return (await bcrypt.compare(password, usuario.password)) ? usuario : null;
 }
 
 /** Lista todos los usuarios (para el panel de administración). */
@@ -65,7 +67,7 @@ export async function actualizar(id: number | string, cambios: Partial<Usuario>)
   let i = 1;
   for (const [campo, valor] of Object.entries(cambios)) {
     campos.push(`${campo} = $${i}`);
-    valores.push(valor);
+    valores.push(campo === 'password' ? await bcrypt.hash(String(valor), RONDAS_BCRYPT) : valor);
     i += 1;
   }
   if (campos.length === 0) return null;
@@ -77,11 +79,11 @@ export async function actualizar(id: number | string, cambios: Partial<Usuario>)
   return rows[0] || null;
 }
 
-/** Cambia la contraseña de un usuario (se guarda en texto plano). */
+/** Cambia la contraseña de un usuario (se guarda el hash, nunca el texto). */
 export async function cambiarPassword(id: number, nuevaPassword: string): Promise<Usuario | null> {
   const { rows } = await db.query<Usuario>(
     'UPDATE usuarios SET password = $1 WHERE id = $2 RETURNING *',
-    [nuevaPassword, id]
+    [await bcrypt.hash(nuevaPassword, RONDAS_BCRYPT), id]
   );
   return rows[0] || null;
 }
