@@ -22,11 +22,33 @@
     return n.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' });
   }
 
-  function raw(valor) {
-    // FALLA: esta función NO escapa nada, devuelve el valor tal cual.
-    // La forma correcta de renderizar texto del servidor es escaparHtml()
-    // (o textContent en vez de innerHTML).
-    return String(valor == null ? '' : valor);
+  /**
+   * Crea un elemento del DOM. El texto se asigna SIEMPRE con textContent:
+   * el navegador lo trata como texto plano y nunca lo interpreta como HTML,
+   * así que un "<script>" o un "<img onerror>" se ve escrito, no se ejecuta.
+   *
+   *   crear('span', 'tag', p.tipo)
+   *   crear('div', 'fila', [hijo1, hijo2])
+   */
+  function crear(tag, clase, contenido) {
+    var el = document.createElement(tag);
+    if (clase) el.className = clase;
+    if (Array.isArray(contenido)) {
+      contenido.forEach(function (hijo) { if (hijo) el.appendChild(hijo); });
+    } else if (contenido != null) {
+      el.textContent = String(contenido);
+    }
+    return el;
+  }
+
+  /** Reemplaza todo el contenido de un nodo por los hijos dados. */
+  function reemplazar(nodo, hijos) {
+    nodo.replaceChildren.apply(nodo, hijos || []);
+  }
+
+  /** Párrafo de "lista vacía" con el estilo del sitio. */
+  function vacio(texto) {
+    return crear('p', 'empty', texto);
   }
 
   function api(url, opciones) {
@@ -59,12 +81,6 @@
     }
   }
 
-  function escaparHtml(texto) {
-    var div = document.createElement('div');
-    div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
-  }
-
   /* ------------------------------------------------------------- catálogo */
   function urlCatalogo() {
     var params = new URLSearchParams();
@@ -90,51 +106,53 @@
     var grid = $('#productos-grid');
 
     if (!productos || productos.length === 0) {
-      grid.innerHTML = '<p class="empty">No encontramos productos con esos filtros.</p>';
+      reemplazar(grid, [vacio('No encontramos productos con esos filtros.')]);
       return;
     }
 
-    // ---------------------------------------------------------------
-    // FALLA (XSS reflejado / almacenado): el HTML se construye con
-    // innerHTML a partir de datos que vienen del servidor (nombres de
-    // producto y texto de la búsqueda). Un "<script>" en el buscador o
-    // en el nombre de un producto se ejecuta en el navegador.
-    //
-    // Corrección: usar textContent, o escapar los valores antes de
-    // interpolarlos (ver la función escaparHtml de arriba).
-    // ---------------------------------------------------------------
-    grid.innerHTML = productos.map(function (p) {
+    // Corrección XSS (#5): cada dato del servidor entra al DOM con
+    // textContent (a través de crear()), nunca concatenado en un string HTML.
+    reemplazar(grid, productos.map(function (p) {
       window.__productos[p.id] = p;
-      var tags = '<span class="tag">' + raw(p.tipo) + '</span>';
-      if (p.variedad) tags += '<span class="tag tag-origen">' + raw(p.variedad) + '</span>';
-      if (p.tamano) tags += '<span class="tag">' + raw(p.tamano) + '</span>';
 
-      return '' +
-        '<article class="product-card">' +
-        '  <div class="product-top">' +
-        '    <h3 class="product-name">' + raw(p.nombre) + '</h3>' +
-        '    <span class="product-price">' + money(p.precio) + '</span>' +
-        '  </div>' +
-        '  <div class="product-tags">' + tags + '</div>' +
-        '  <p class="product-desc">' + raw(p.descripcion) + '</p>' +
-        '  <button class="btn btn-ghost btn-agregar" data-id="' + raw(p.id) + '">Agregar</button>' +
-        '</article>';
-    }).join('');
+      var tags = [crear('span', 'tag', p.tipo)];
+      if (p.variedad) tags.push(crear('span', 'tag tag-origen', p.variedad));
+      if (p.tamano) tags.push(crear('span', 'tag', p.tamano));
+
+      var boton = crear('button', 'btn btn-ghost btn-agregar', 'Agregar');
+      boton.setAttribute('data-id', String(p.id));
+
+      return crear('article', 'product-card', [
+        crear('div', 'product-top', [
+          crear('h3', 'product-name', p.nombre),
+          crear('span', 'product-price', money(p.precio)),
+        ]),
+        crear('div', 'product-tags', tags),
+        crear('p', 'product-desc', p.descripcion),
+        boton,
+      ]);
+    }));
   }
 
   function renderResultado(filtros, total) {
     var el = $('#resultado-busqueda');
 
-    // FALLA (XSS reflejado): se interpola el texto buscado con innerHTML.
+    // Corrección XSS reflejado (#5): el texto buscado va dentro de un
+    // <strong> creado a mano y asignado con textContent.
     if (filtros && filtros.q) {
-      el.innerHTML = 'Resultados para <strong>' + filtros.q + '</strong> — ' + total + ' producto(s)';
+      reemplazar(el, [
+        document.createTextNode('Resultados para '),
+        crear('strong', null, filtros.q),
+        document.createTextNode(' — ' + total + ' producto(s)'),
+      ]);
     } else {
       el.textContent = total + ' producto(s) en el menú';
     }
   }
 
-  function renderErrorProductos(mensaje) {
-    $('#productos-grid').innerHTML = '<p class="empty">No se pudo cargar el menú: ' + (mensaje || 'error desconocido') + '</p>';
+  function renderErrorProductos() {
+    // No se repite el mensaje del servidor: un texto fijo no se puede inyectar.
+    reemplazar($('#productos-grid'), [vacio('No se pudo cargar el menú. Probá de nuevo en un momento.')]);
   }
 
   /* --------------------------------------------------------------- carrito */
@@ -178,37 +196,47 @@
     var total = 0;
 
     if (estado.carrito.length === 0) {
-      cont.innerHTML = '<p class="empty">El carrito está vacío.</p>';
-      lista.innerHTML = '';
+      reemplazar(cont, [vacio('El carrito está vacío.')]);
+      reemplazar(lista, []);
       $('#resumen-total').textContent = money(0);
       return;
     }
 
-    cont.innerHTML = estado.carrito.map(function (item, i) {
+    // El carrito sale de localStorage: también es entrada no confiable.
+    function botonCarrito(accion, i, texto, clase) {
+      var b = crear('button', clase || null, texto);
+      b.type = 'button';
+      b.setAttribute('data-acc', accion);
+      b.setAttribute('data-i', String(i));
+      return b;
+    }
+
+    reemplazar(cont, estado.carrito.map(function (item, i) {
       var subtotal = item.precio * item.cantidad;
       total += subtotal;
-      return '' +
-        '<div class="cart-item">' +
-        '  <div>' +
-        '    <div class="cart-item-name">' + raw(item.nombre) + '</div>' +
-        '    <div class="cart-item-meta">' + money(item.precio) + ' c/u</div>' +
-        '  </div>' +
-        '  <div class="qty-control">' +
-        '    <button type="button" data-acc="menos" data-i="' + i + '">&minus;</button>' +
-        '    <span>' + item.cantidad + '</span>' +
-        '    <button type="button" data-acc="mas" data-i="' + i + '">+</button>' +
-        '  </div>' +
-        '  <div>' +
-        '    <div class="cart-item-price">' + money(subtotal) + '</div>' +
-        '    <button type="button" class="link-danger" data-acc="quitar" data-i="' + i + '">Quitar</button>' +
-        '  </div>' +
-        '</div>';
-    }).join('');
+      return crear('div', 'cart-item', [
+        crear('div', null, [
+          crear('div', 'cart-item-name', item.nombre),
+          crear('div', 'cart-item-meta', money(item.precio) + ' c/u'),
+        ]),
+        crear('div', 'qty-control', [
+          botonCarrito('menos', i, '−'),
+          crear('span', null, item.cantidad),
+          botonCarrito('mas', i, '+'),
+        ]),
+        crear('div', null, [
+          crear('div', 'cart-item-price', money(subtotal)),
+          botonCarrito('quitar', i, 'Quitar', 'link-danger'),
+        ]),
+      ]);
+    }));
 
-    lista.innerHTML = estado.carrito.map(function (item) {
-      return '<li><span>' + raw(item.nombre) + ' × ' + item.cantidad + '</span><span>' +
-        money(item.precio * item.cantidad) + '</span></li>';
-    }).join('');
+    reemplazar(lista, estado.carrito.map(function (item) {
+      return crear('li', null, [
+        crear('span', null, item.nombre + ' × ' + item.cantidad),
+        crear('span', null, money(item.precio * item.cantidad)),
+      ]);
+    }));
 
     $('#resumen-total').textContent = money(total);
   }
@@ -228,9 +256,9 @@
       }),
     }).then(function (resp) {
       if (!resp.ok) {
-        // FALLA (XSS reflejado): el mensaje del servidor se pinta con innerHTML.
+        // Corrección XSS reflejado (#5): el mensaje del servidor va como texto.
         feedback.className = 'form-feedback is-error';
-        feedback.innerHTML = 'No pudimos enviar el pedido: ' + (resp.data.error || 'error desconocido');
+        feedback.textContent = 'No pudimos enviar el pedido: ' + (resp.data.error || 'error desconocido');
         return;
       }
       feedback.className = 'form-feedback is-ok';
@@ -251,24 +279,23 @@
     return api('/comentarios').then(function (resp) {
       var cont = $('#lista-resenas');
       if (!resp.ok || !resp.data.comentarios || resp.data.comentarios.length === 0) {
-        cont.innerHTML = '<p class="empty">Todavía no hay reseñas. ¡Sé el primero!</p>';
+        reemplazar(cont, [vacio('Todavía no hay reseñas. ¡Sé el primero!')]);
         return;
       }
-      // FALLA (XSS almacenado): el texto de la reseña viene de la base y se
-      // inyecta con innerHTML → se ejecuta en el navegador de cada visitante.
-      cont.innerHTML = resp.data.comentarios.map(function (c) {
-        var estrellas = '';
-        var i;
-        for (i = 0; i < Number(c.calificacion || 0); i++) estrellas += '★';
-        return '' +
-          '<article class="review">' +
-          '  <div class="review-head">' +
-          '    <span class="review-author">' + raw(c.autor) + '</span>' +
-          '    <span class="review-stars">' + estrellas + '</span>' +
-          '  </div>' +
-          '  <p class="review-text">' + raw(c.texto) + '</p>' +
-          '</article>';
-      }).join('');
+      // Corrección XSS almacenado (#6): autor y texto vienen de la base,
+      // escritos por cualquier visitante. Se pintan con textContent, así que
+      // una reseña con "<script>" se lee como texto y no se ejecuta.
+      reemplazar(cont, resp.data.comentarios.map(function (c) {
+        // La calificación se acota a 0..5 por si en la base quedó algo raro.
+        var n = Math.max(0, Math.min(5, Math.floor(Number(c.calificacion) || 0)));
+        return crear('article', 'review', [
+          crear('div', 'review-head', [
+            crear('span', 'review-author', c.autor),
+            crear('span', 'review-stars', '★'.repeat(n)),
+          ]),
+          crear('p', 'review-text', c.texto),
+        ]);
+      }));
     });
   }
 
@@ -285,7 +312,7 @@
     }).then(function (resp) {
       if (!resp.ok) {
         feedback.className = 'form-feedback is-error';
-        feedback.innerHTML = 'No se pudo publicar: ' + (resp.data.error || 'error desconocido');
+        feedback.textContent = 'No se pudo publicar: ' + (resp.data.error || 'error desconocido');
         return;
       }
       feedback.className = 'form-feedback is-ok';
