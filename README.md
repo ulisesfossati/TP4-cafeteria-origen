@@ -95,15 +95,17 @@ El objetivo es que termine en `✔` sin que se rompan los tests.
 
 ## 2. Usuarios de prueba
 
-| Usuario | Contraseña | Rol | Qué sirve para |
+| Usuario | Clave (en el `.env`) | Rol | Qué sirve para |
 |---|---|---|---|
-| `admin` | `admin` | admin | Credencial **por defecto** (falla de configuración) |
-| `valentina` | `origen2024` | admin | La dueña del negocio |
-| `barista` | `cafe123` | barista | Usuario legítimo no administrador |
-| `mozo` | `mozo123` | mozo | Personal de sala |
-| `cliente` | `cliente` | cliente | Para probar la **escalada de privilegios** |
+| `admin` | `CLAVE_ADMIN` | admin | Administración |
+| `valentina` | `CLAVE_VALENTINA` | admin | La dueña del negocio |
+| `barista` | `CLAVE_BARISTA` | barista | Usuario legítimo no administrador |
+| `mozo` | `CLAVE_MOZO` | mozo | Personal de sala |
+| `cliente` | `CLAVE_CLIENTE` | cliente | Para probar la **escalada de privilegios** |
 
-Las contraseñas están en **texto plano** en la base (falla intencional).
+No hay claves de fábrica: cada una se elige en el `.env`. Si queda vacía, la
+app genera una al azar la primera vez y la muestra en `docker compose logs app`.
+En la base se guardan hasheadas con bcrypt, nunca en texto plano.
 
 ---
 
