@@ -51,6 +51,12 @@ router.get('/variedades', async (req, res, next) => {
  */
 router.get('/:id', async (req, res, next) => {
   try {
+    // Lista blanca: un id de producto es un entero positivo. Cualquier otra
+    // cosa (por ejemplo "<script>...") se responde con el mismo 404 genérico
+    // sin llegar a la base ni a un mensaje de error que la repita (#5).
+    if (!/^[1-9]\d{0,9}$/.test(req.params.id)) {
+      return res.status(404).json({ error: 'Producto no encontrado.' });
+    }
     const producto = await catalogo.obtener(req.params.id);
     if (!producto) {
       // Corrección XSS reflejado (#5): mensaje fijo, sin repetir el id
