@@ -1,0 +1,4 @@
+# Los scripts .sh corren dentro de los contenedores (Linux): tienen que quedar
+# con saltos de línea LF aunque el repo se clone en Windows (core.autocrlf).
+# Con CRLF, bash falla ("/bin/bash^M: bad interpreter") y no se crea origen_app.
+*.sh text eol=lf
