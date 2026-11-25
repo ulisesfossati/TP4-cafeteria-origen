@@ -1,4 +1,5 @@
 import express from 'express';
+import { requiereSesion, requiereRol } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -14,26 +15,15 @@ const router = express.Router();
  * En un entorno real estos endpoints quedan detrás de autenticación y no
  * deberían existir en producción.
  */
-router.get('/', (req, res) => {
+router.get('/', requiereSesion, requiereRol('admin'), (req, res) => {
   res.json({
     mensaje: 'Diagnóstico del servidor',
     version: '1.0.0',
-    entorno: process.env,
-    baseDeDatos: {
-      host: process.env.DB_HOST,
-      puerto: process.env.DB_PORT,
-      nombre: process.env.DB_NAME,
-      usuario: process.env.DB_USER,
-      // FALLA: también se filtra la contraseña.
-      password: process.env.DB_PASSWORD,
-    },
     sistema: {
       node: process.version,
       plataforma: process.platform,
       arquitectura: process.arch,
-      memoria: process.memoryUsage(),
       uptime: process.uptime(),
-      pid: process.pid,
     },
   });
 });
