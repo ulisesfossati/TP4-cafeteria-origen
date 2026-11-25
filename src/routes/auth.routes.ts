@@ -1,21 +1,52 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import * as usuarios from '../services/usuarios.service';
 import { crearSesion, destruirSesion, obtenerSesion } from '../middleware/sesion';
 
 const router = express.Router();
 
 /**
+ * Protección contra fuerza bruta (#12).
+ *
+ * Dos límites que cuentan solo los intentos FALLIDOS (los logins correctos no
+ * suman, por eso skipSuccessfulRequests):
+ *  - por cuenta: 5 fallos cada 15 minutos, vengan de la IP que vengan.
+ *  - por IP: 20 fallos cada 15 minutos, aunque prueben cuentas distintas.
+ * Pasado el tope se responde 429 (Too Many Requests).
+ */
+const MENSAJE_BLOQUEO = {
+  error: 'Demasiados intentos fallidos. Probá de nuevo en unos minutos.',
+};
+
+const limitePorIp = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: MENSAJE_BLOQUEO,
+});
+
+const limitePorCuenta = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => 'cuenta:' + String(req.body?.username ?? '').toLowerCase(),
+  message: MENSAJE_BLOQUEO,
+});
+
+/**
  * Inicio de sesión.
  *
- * FALLAS:
- *  - Inyección SQL en la verificación de credenciales (ver usuarios.service).
- *  - Contraseñas almacenadas en texto plano.
- *  - Mensajes de error que distinguen "usuario inexistente" de "contraseña
- *    incorrecta" → enumeración de usuarios.
- *  - Sin rate limiting ni bloqueo: fuerza bruta ilimitada.
- *  - El identificador de sesión no se regenera (fijación de sesión).
+ * CORRECCIONES:
+ *  - #12: límite de intentos fallidos por IP y por cuenta (429).
+ *  - #17: la respuesta es idéntica (mismo código y mismo texto) para un
+ *    usuario que no existe y para una clave equivocada, y no repite lo que
+ *    escribió quien llama.
  */
-router.post('/login', async (req, res, next) => {
+router.post('/login', limitePorIp, limitePorCuenta, async (req, res, next) => {
   try {
     const { username, password } = req.body || {};
 
@@ -23,20 +54,11 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Falta usuario o contraseña.' });
     }
 
-    // La verificación de credenciales es la consulta concatenada (SQLi).
     const usuario = await usuarios.autenticar(username, password);
 
     if (!usuario) {
-      // FALLA — Enumeración de usuarios: el mensaje distingue entre
-      // "no existe" y "contraseña incorrecta", lo que permite a un atacante
-      // averiguar qué cuentas hay en el sistema.
-      const existe = await usuarios.buscarPorUsername(username);
-      if (existe) {
-        return res.status(401).json({ error: 'La contraseña es incorrecta.' });
-      }
-      return res
-        .status(401)
-        .json({ error: `El usuario "${username}" no existe en el sistema.` });
+      // #17: mensaje único, sin pistas sobre qué cuentas existen.
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
     }
 
     crearSesion(req, res, {
@@ -63,10 +85,11 @@ router.post('/login', async (req, res, next) => {
 /**
  * Cierre de sesión.
  *
- * FALLA: sólo borra la cookie del navegador. La sesión sigue existiendo en el
- * servidor, así que con la cookie robada se puede seguir usando.
+ * CORRECCIÓN (#16): se borra la sesión del almacén del servidor (antes solo se
+ * borraba la cookie del navegador) y además se limpia la cookie.
  */
 router.post('/logout', (req, res) => {
+  destruirSesion(req);
   res.clearCookie('sid', { path: '/' });
   res.json({ mensaje: 'Sesión cerrada.' });
 });
