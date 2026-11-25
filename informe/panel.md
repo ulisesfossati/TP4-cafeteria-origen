@@ -1,3 +1,12 @@
+## #10 Subida de archivos sin restricciones
+**Qué es y por qué importa:** Permitir subir archivos arbitrarios con nombres controlados por el usuario habilita ataques de XSS almacenado (subiendo archivos `.html` o `.svg` ejecutables en el mismo origen) y (`../` para escribir fuera de la carpeta de destino).
+**Dónde está:** `src/routes/admin.routes.ts`, (`POST /api/admin/subir-archivo`).
+**Cómo se observa:** Subiendo un archivo `prueba.html` con contenido `<script>alert(1)</script>` desde el panel y abriendo `/uploads/prueba.html`, el navegador ejecuta el código JavaScript bajo el dominio de la aplicación.
+**Por qué ocurre:** El endpoint decodificaba el Base64 y escribía el archivo directamente usando `path.join(config.uploadsDir, nombre)` sin verificar extensión, firma real de bytes, tamaño máximo ni sanear rutas relativas.
+**Cómo se corrige:** Se implementó una lista blanca de extensiones de imagen (`.png`, `.jpg`, `.jpeg`, `.webp`), validación de cabecera binaria (*magic numbers*), límite de tamaño de 2 MB y generación de nombres aleatorios mediante `crypto.randomUUID()`.
+**Cómo se verifica:** Pasó el test *"no se aceptan archivos ejecutables ni se escribe fuera de uploads"* en `npm run test:seguridad` y los controles `VAL-04` y `VAL-05` en `npm run check:security`.
+**Reflexión:** Nunca se debe confiar en el nombre ni en la extensión declarada por el cliente al subir archivos; siempre se debe validar la firma binaria real, limitar el peso y renombrar el recurso en el servidor.
+
 ## #18 Autorización ausente: cualquiera entra al panel
 **Qué es y por qué importa:** Es una falla de control de acceso. Aunque la interfaz oculte opciones, si el servidor no verifica los permisos en cada endpoint, cualquier usuario autenticado puede ejecutar acciones administrativas críticas.
 **Dónde está:** `src/routes/admin.routes.ts`.
