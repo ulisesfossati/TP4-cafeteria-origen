@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 
 import config from '../config';
 import * as catalogo from '../services/catalogo.service';
@@ -165,21 +165,52 @@ router.post('/cambiar-contrasena', async (req, res, next) => {
  * shell.
  * -----------------------------------------------------------------------------
  */
+const HOSTS_PERMITIDOS = new Set([
+  'localhost',
+  '127.0.0.1',
+  'db',
+  'proveedor.origen.local',
+]);
+
 router.post('/probar-conexion', (req, res) => {
   const { host } = req.body || {};
 
-  // FALLA: entrada de usuario concatenada en un comando de shell.
-  const comando = `ping -c 3 ${host}`;
+  if (typeof host !== 'string' || !HOSTS_PERMITIDOS.has(host.trim())) {
+    return res.status(400).json({
+      error: 'Host no permitido. Seleccioná un servidor de la lista blanca.',
+    });
+  }
 
-  exec(comando, (error, stdout, stderr) => {
-    res.json({
-      comando,
+  const hostLimpio = host.trim();
+  const proceso = spawn('ping', ['-c', '3', hostLimpio], { shell: false });
+
+  let stdout = '';
+  let stderr = '';
+
+  proceso.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+  });
+
+  proceso.stderr.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  proceso.on('error', (err) => {
+    res.status(500).json({
+      comando: `ping -c 3 ${hostLimpio}`,
       salida: stdout,
-      error: stderr || (error ? error.message : null),
+      error: err.message,
+    });
+  });
+
+  proceso.on('close', (code) => {
+    res.json({
+      comando: `ping -c 3 ${hostLimpio}`,
+      salida: stdout,
+      error: code !== 0 ? stderr || `El proceso finalizó con código ${code}` : null,
     });
   });
 });
-
 /**
  * POST /api/admin/subir-archivo
  *
