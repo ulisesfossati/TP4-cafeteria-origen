@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
+import crypto from 'crypto';
 
 import config from '../config';
 import * as catalogo from '../services/catalogo.service';
@@ -177,25 +178,63 @@ router.post('/probar-conexion', (req, res) => {
  * y guardar fuera del árbol web.
  * -----------------------------------------------------------------------------
  */
-router.post('/subir-archivo', express.json({ limit: '8mb' }), (req, res, next) => {
+const EXTENSIONES_PERMITIDAS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const TAMANO_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+
+function esImagenValida(buffer: Buffer, ext: string): boolean {
+  if (ext === '.png') {
+    return (
+      buffer.length >= 8 &&
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47
+    );
+  }
+  if (ext === '.jpg' || ext === '.jpeg') {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+  if (ext === '.webp') {
+    return (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
+  }
+  return false;
+}
+
+router.post('/subir-archivo', express.json({ limit: '4mb' }), (req, res, next) => {
   try {
     const { nombre, contenidoBase64 } = req.body || {};
 
-    if (!nombre || !contenidoBase64) {
+    if (typeof nombre !== 'string' || typeof contenidoBase64 !== 'string' || !nombre || !contenidoBase64) {
       return res.status(400).json({ error: 'Falta el archivo.' });
     }
 
-    // FALLA: sin validación de extensión, MIME ni tamaño.
+    const extension = path.extname(path.basename(nombre)).toLowerCase();
+    if (!EXTENSIONES_PERMITIDAS.has(extension)) {
+      return res.status(400).json({ error: 'Extensión de archivo no permitida.' });
+    }
+
     const buffer = Buffer.from(contenidoBase64, 'base64');
+    if (buffer.length === 0 || buffer.length > TAMANO_MAX_BYTES) {
+      return res.status(400).json({ error: 'El archivo supera el tamaño máximo permitido (2 MB).' });
+    }
+
+    if (!esImagenValida(buffer, extension)) {
+      return res.status(400).json({ error: 'El contenido del archivo no corresponde a una imagen válida.' });
+    }
+
     fs.mkdirSync(config.uploadsDir, { recursive: true });
 
-    // FALLA: nombre tomado del cliente sin sanear (path traversal).
-    const destino = path.join(config.uploadsDir, nombre);
+    const nombreSeguro = `${crypto.randomUUID()}${extension}`;
+    const destino = path.join(config.uploadsDir, nombreSeguro);
     fs.writeFileSync(destino, buffer);
 
     res.json({
       mensaje: 'Archivo subido.',
-      url: `/uploads/${nombre}`,
+      url: `/uploads/${nombreSeguro}`,
       bytes: buffer.length,
     });
   } catch (err) {
