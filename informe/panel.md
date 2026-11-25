@@ -25,6 +25,15 @@
 **Cómo se verifica:** Pasó el test *"un usuario NO puede cambiar su propio rol a admin"* en `npm run test:seguridad` y el control `AUTH-15` en `npm run check:security`.
 **Reflexión:** Los endpoints de edición nunca deben volcar propiedades arbitrarias del `req.body` hacia la base de datos; los campos sensibles como roles o permisos deben validarse con listas blancas y reglas estrictas de negocio.
 
+## #20 Inyección de comandos en "probar conexión"
+**Qué es y por qué importa:** La inyección de comandos del sistema operativo permite que un atacante ejecute instrucciones arbitrarias dentro del servidor aprovechando metacaracteres de shell (`;`, `&&`, `|`, `$()`), comprometiendo por completo el contenedor.
+**Dónde está:** `src/routes/admin.routes.ts`, (`POST /api/admin/probar-conexion`).
+**Cómo se observa:** Ingresando `127.0.0.1; cat /etc/hostname` en el campo de host de "Probar conexión con el proveedor", la respuesta JSON devuelve el resultado del `ping` seguido del contenido de `/etc/hostname`.
+**Por qué ocurre:** Se concatenaba `host` dentro de un string pasado a `child_process.exec()`, función que invoca `/bin/sh -c` e interpreta operadores de encadenamiento de comandos.
+**Cómo se corrige:** Se reemplazó `exec` por `spawn('ping', ['-c', '3', host], { shell: false })` pasando los argumentos en un arreglo separado sin invocar una shell, y se validó previamente que el `host` pertenezca a una lista blanca estricta de servidores permitidos.
+**Cómo se verifica:** Pasaron los tests *"el endpoint de conexión NO ejecuta el comando inyectado"* y *"el endpoint de conexión NO ejecuta un segundo comando encadenado"* en `npm run test:seguridad`, junto con `CMD-01`, `CMD-02` y `CMD-03` en `npm run check:security`.
+**Reflexión:** Nunca se debe invocar una shell del sistema operativo con entradas provistas por el usuario; siempre hay que validar mediante listas blancas y usar APIs que reciban argumentos separados (`spawn` / `execFile` con `shell: false`).
+
 ## #21 Exposición de secretos por /api/_diagnostico
 **Qué es y por qué importa:** Es una falla de control de acceso y mala configuración de seguridad. Exponer variables de entorno revela credenciales de la base de datos y secretos internos a cualquier usuario sin autenticar.
 **Dónde está:** `src/routes/debug.routes.ts`, (`GET /api/_diagnostico`).
