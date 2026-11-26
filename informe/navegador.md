@@ -12,8 +12,6 @@
 
 Todas las pruebas se hicieron contra la instalación local (`http://localhost:8080`), a mano y desde la interfaz o con F12. No se escribió ningún script que automatice ataques.
 
-> 📷 = lugar para pegar la captura tomada al reproducir la falla.
-
 ---
 
 ## #5 XSS reflejado en el buscador y en los mensajes de error
@@ -33,7 +31,11 @@ Todas las pruebas se hicieron contra la instalación local (`http://localhost:80
 2. Aparece el `alert`: el texto buscado se insertó como una etiqueta `<img>` real.
 3. Abrir `http://localhost:8080/api/productos/<script>alert(1)</script>`. La respuesta trae el `<script>` tal cual dentro de `error`.
 
-📷 alert del buscador · 📷 respuesta JSON con el `<script>`
+Respuesta del servidor antes de la corrección (paso 3):
+
+```json
+{"error":"invalid input syntax for type integer: \"<script>alert(1)</script>\"","stack":"error: invalid input syntax for type integer: ..."}
+```
 
 **Por qué ocurre:** `innerHTML` le pide al navegador que *interprete* el string como HTML. Cuando ese string se arma concatenando datos del usuario o del servidor, el que controla los datos controla el HTML. Además el servidor repetía la entrada en sus mensajes de error, así que cualquier cliente que los pintara quedaba expuesto.
 
@@ -78,8 +80,6 @@ Los mensajes de `auth.routes.ts` (login) y `middleware/errores.ts` (ruta no enco
 - `npm run check:security`: **XSS-01** ✔.
 - A mano: el buscador con el mismo payload muestra `Resultados para <img src=x onerror=alert(1)> — 0 producto(s)` como texto y no aparece el alert. `GET /api/productos/<script>…` responde `{"error":"Producto no encontrado."}`.
 
-📷 buscador mostrando el payload como texto
-
 **Reflexión:** en un proyecto real conviene no tener `innerHTML` en el código de la aplicación: un linter (por ejemplo `no-unsanitized`) puede prohibirlo, y conviene usar un framework que escape por defecto (React, Vue). Los mensajes de error deberían ser genéricos y salir de una lista fija, nunca de la entrada del usuario.
 
 ---
@@ -94,8 +94,6 @@ Los mensajes de `auth.routes.ts` (login) y `middleware/errores.ts` (ruta no enco
 
 1. En "Dejá tu reseña" poner como opinión `<img src=x onerror=alert(document.cookie)>` y publicar.
 2. Aparece el alert con las cookies. Al recargar la página vuelve a aparecer, y lo mismo pasa en cualquier otro navegador que abra el sitio.
-
-📷 alert al recargar
 
 **Por qué ocurre:** el texto de la reseña es entrada de cualquier visitante anónimo. Se guarda tal cual y después se trata como HTML de confianza al mostrarlo.
 
@@ -121,8 +119,6 @@ Como segunda capa, la CSP del #23 bloquea los manejadores inline (`onerror=`) au
 - `npm run test:seguridad`: `el cliente NO inserta datos con innerHTML` ✔.
 - A mano: la reseña de prueba que ya estaba guardada ahora se lee como texto (`<img src=x onerror=…>`) y no aparece ningún alert.
 
-📷 la misma reseña mostrada como texto
-
 **Reflexión:** todo lo que escribe un usuario es dato y nunca código, sin importar dónde se guarde. En un proyecto real se escapa siempre en la salida (o se usa un sanitizador como DOMPurify si de verdad hace falta HTML enriquecido), se valida en la entrada (E1) y se agrega CSP como red de seguridad.
 
 ---
@@ -144,8 +140,6 @@ if (objetivo) {
 
 1. Abrir `http://localhost:8080/admin.html?vista=<img src=x onerror=alert(1)>`.
 2. Aparece el alert. Con F12 → Elements se ve el `<img>` dentro de `#panel-bienvenida`.
-
-📷 alert y el `<img>` en Elements
 
 **Por qué ocurre:** `location.search` lo controla quien arma el enlace, no la aplicación. Se usaba sin validar como si fuera HTML confiable.
 
@@ -171,8 +165,6 @@ Las tablas, KPIs y mensajes del panel también se pasaron a `createElement`/`tex
 - `npm run test:seguridad`: `el cliente NO inserta datos con innerHTML` ✔.
 - A mano: la misma URL ya no dispara nada y el título queda como estaba. `admin.html?vista=reportes` abre la pestaña Reportes.
 
-📷 panel con la URL maliciosa sin alert
-
 **Reflexión:** todo lo que llega por la URL (query, hash, `document.referrer`) es entrada del atacante. En un proyecto real se valida contra valores conocidos y se usa una CSP con Trusted Types para que el navegador rechace las asignaciones peligrosas a `innerHTML`.
 
 ---
@@ -187,8 +179,6 @@ Las tablas, KPIs y mensajes del panel también se pasaron a `createElement`/`tex
 
 1. Con F12 → Network, publicar una reseña: el `POST /api/comentarios` sólo lleva la cookie y el JSON. No hay ningún dato que una página ajena no pueda adivinar.
 2. Con *Copy as cURL* y sacando todo menos el cuerpo, la petición se repite desde la terminal y se acepta (`201`). Cualquier origen puede generarla.
-
-📷 Network mostrando el POST sin token
 
 **Por qué ocurre:** el servidor identifica al usuario sólo por la cookie, y la cookie la pone el navegador automáticamente. No había nada en la petición que demostrara que salió del propio sitio.
 
@@ -249,8 +239,6 @@ El login queda exento: todavía no hay sesión que aprovechar, y los tests de fu
 
 - En el navegador: publicar reseña, hacer un pedido y, en el panel, cambiar el estado de un pedido siguen funcionando. En Network se ve la cabecera `X-CSRF-Token`.
 
-📷 Network con `X-CSRF-Token` · 📷 403 sin token
-
 **Reflexión:** en un proyecto real se usa la protección CSRF que ya trae el framework (no una casera), con cookies `SameSite=Lax/Strict` y verificación de `Origin`, y nunca se usan peticiones GET para cambiar estado. Lo más importante es entender que la cookie *sola* no prueba la intención del usuario.
 
 ---
@@ -266,7 +254,11 @@ El login queda exento: todavía no hay sesión que aprovechar, y los tests de fu
 1. F12 → Network → la petición a `/` → Response Headers.
 2. No hay `Content-Security-Policy`, `X-Content-Type-Options` ni `X-Frame-Options`, y aparece `X-Powered-By: Express`, que le dice al atacante qué tecnología se usa.
 
-📷 cabeceras antes
+Con `curl -I http://localhost:8080/` sobre la versión original, de todas estas cabeceras la única que aparece es:
+
+```
+X-Powered-By: Express
+```
 
 **Por qué ocurre:** Express no agrega cabeceras de seguridad por defecto y nadie las configuró.
 
@@ -315,8 +307,6 @@ X-Frame-Options: SAMEORIGIN
 
 - Recorrida de todas las pantallas con la consola abierta (inicio, buscador, carrito y pedido, reseñas, login del panel y cada pestaña) sin errores de CSP.
 
-📷 cabeceras después · 📷 consola limpia
-
 **Reflexión:** las cabeceras no reemplazan escribir código seguro, pero hacen que un error no termine en desastre. En un proyecto real se activan desde el primer día, empezando por `Content-Security-Policy-Report-Only` para ver qué se rompería, y se prohíbe el JS inline desde el diseño.
 
 ---
@@ -328,8 +318,6 @@ X-Frame-Options: SAMEORIGIN
 **Dónde está:** `src/routes/comentarios.routes.ts`, líneas 24 a 31: el `POST` pasa `autor`, `texto` y `calificacion` directo al servicio. El formulario tiene `maxlength`, pero eso sólo frena al navegador, no a quien manda el JSON a mano.
 
 **Cómo se observa:** en F12 → Console, con la página abierta, mandar a mano (con el token si ya está la rama de CSRF) un `fetch('/api/comentarios', {method:'POST', …})` con `texto` de 5000 caracteres y `calificacion: 99`. Se guarda y responde `201`.
-
-📷 reseña gigante guardada
 
 **Por qué ocurre:** la validación estaba sólo en el HTML del cliente, que el usuario controla.
 
